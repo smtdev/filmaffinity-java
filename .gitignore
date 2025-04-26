@@ -1,21 +1,45 @@
-.gradle
-**/build/
-!src/**/build/
+# IDE generated files
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+nbproject/private/
+build/
+.gradle/
+local.properties
+.DS_Store
 
-# Ignore Gradle GUI config
-gradle-app.setting
+# Compiled files
+*.class
 
-# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
-!gradle-wrapper.jar
+# Package files
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
 
-# Avoid ignore Gradle wrappper properties
-!gradle-wrapper.properties
+# Logs
+*.log
 
-# Cache of project
-.gradletasknamecache
+# OS specific settings
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Eclipse Gradle plugin generated files
-# Eclipse Core
-.project
-# JDT-specific (Eclipse Java Development Tools)
+# NetBeans config files
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# Eclipse config files
+.settings/
 .classpath
+.project
+
+# VS Code config files
+.vscode/

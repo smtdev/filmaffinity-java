@@ -1,0 +1,19 @@
+// settings.gradle
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "filmaffinity-java"
+// If you decide to create modules *within* this library later, you would add them here.
+// For now, as a simple library, we don't need to include anything else. 

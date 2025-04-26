@@ -1,0 +1,22 @@
+// build.gradle (Project/Library Level)
+plugins {
+    id 'java-library' // Indicates it's a standard Java library
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8 // Or the Java version you prefer (8 is very compatible)
+    targetCompatibility = JavaVersion.VERSION_1_8 // Keep consistency
+}
+
+dependencies {
+    // Jsoup for HTML parsing
+    api 'org.jsoup:jsoup:1.19.1' // Use 'api' so the dependency is available to library users
+
+    // Dependencies for testing (optional but recommended)
+    testImplementation 'junit:junit:4.13.2'
+}
+
+// Optional: Configuration for generating Javadoc (good practice for libraries)
+// tasks.withType(Javadoc) {
+//     options.encoding = 'UTF-8'
+// } 
