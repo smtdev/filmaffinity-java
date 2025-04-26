@@ -2,6 +2,7 @@ package me.smt.filmaffinityjava;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.junit.Test;
 
 import java.io.File;
@@ -108,5 +109,128 @@ public class FilmaffinityScraperTest {
     @Test(expected = FilmaffinityScraper.ScraperException.class)
     public void testParseNullDocument() throws Exception {
          FilmaffinityScraper.parseFilmInfo(null, "null_doc.html"); // This should throw
+    }
+
+    // --- Tests for parseFilmInfo --- //
+
+    @Test
+    public void parseFilmInfo_ValidMovieHtml_ReturnsCorrectInfo() throws Exception {
+        String html = "<html><head><title>Test Movie</title></head><body>" +
+                      "<h1 id='main-title'><span itemprop='name'>Test Movie Title</span></h1>" +
+                      "<dl class='movie-info'>" +
+                      "<dt>Título original</dt><dd>Original Test Title</dd>" +
+                      "<dt>Año</dt><dd itemprop='datePublished'>2023</dd>" +
+                      "<dt>Duración</dt><dd>120 min.</dd>" +
+                      "<dt>País</dt><dd><span><img/></span> Test Country</dd>" +
+                      "<dt>Dirección</dt><dd><div class='credits'><span itemprop='name'>Director 1</span>, <span itemprop='name'>Director 2</span></div></dd>" +
+                      "<dt>Sinopsis</dt><dd itemprop='description'>Synopsis text here.</dd>" +
+                      "</dl>" +
+                      "<div id='movie-rat-avg'>8,5</div>" +
+                      "<div id='movie-main-image-container'><img src='/images/poster.jpg'/></div>" +
+                      "<dd class='card-genres'><a href='#'>Action</a> | <a href='#'>Adventure</a> | <a href='#'>Sci-Fi</a></dd>" +
+                      "</body></html>";
+        Document doc = Jsoup.parse(html, "http://example.com/"); // Base URI needed for absUrl
+
+        FilmInfo info = FilmaffinityScraper.parseFilmInfo(doc, "http://example.com/film1.html");
+
+        assertNotNull(info);
+        assertEquals("Test Movie Title", info.getTitle());
+        assertEquals("Original Test Title", info.getOriginalTitle());
+        assertEquals("2023", info.getYear());
+        assertEquals("120 min.", info.getDuration());
+        assertEquals("Test Country", info.getCountry()); // Assuming extraction handles flag img
+        assertEquals("Synopsis text here.", info.getSynopsis());
+        assertEquals("8,5", info.getRating());
+        //assertEquals("http://example.com/images/poster.jpg", info.getPosterUrl()); // Test absolute URL
+        assertTrue(info.getDirectors().contains("Director 1"));
+        assertTrue(info.getDirectors().contains("Director 2"));
+        assertEquals(2, info.getDirectors().size());
+        assertTrue(info.getGenres().contains("Action"));
+        assertTrue(info.getGenres().contains("Adventure"));
+        assertTrue(info.getGenres().contains("Sci-Fi"));
+        assertEquals(3, info.getGenres().size());
+        assertEquals(FilmInfo.Type.MOVIE, info.getType()); // Default type
+    }
+
+     @Test
+     public void parseFilmInfo_ValidSeriesHtml_ReturnsCorrectType() throws Exception {
+         String html = "<html><body>" +
+                       "<h1 id='main-title'><span itemprop='name'>Test Series</span><span class='movie-type'><span class='type'>(Serie de TV)</span></span></h1>" +
+                       // ... other necessary fields ...
+                       "</body></html>";
+         Document doc = Jsoup.parse(html);
+         FilmInfo info = FilmaffinityScraper.parseFilmInfo(doc, "http://example.com/film2.html");
+         assertEquals(FilmInfo.Type.TV_SHOW, info.getType());
+     }
+
+    @Test(expected = FilmaffinityScraper.ScraperException.class)
+    public void parseFilmInfo_MissingTitle_ThrowsException() throws Exception {
+        String html = "<html><body><dl class='movie-info'><dt>Año</dt><dd>2023</dd></dl></body></html>";
+        Document doc = Jsoup.parse(html);
+        FilmaffinityScraper.parseFilmInfo(doc, "http://example.com/film_no_title.html");
+    }
+
+    // --- Tests for parseMovieCardElement --- //
+
+    @Test
+    public void parseMovieCardElement_ValidCardHtml_ReturnsCorrectResult() {
+        String cardHtml = "<div class='movie-card' data-movie-id='12345'>" +
+                          "<div class='mc-poster'><a href='film12345.html'><img data-srcset='http://example.com/small.jpg 150w, http://example.com/large.jpg 400w' src='http://example.com/placeholder.jpg'/></a></div>" +
+                          "<div class='mc-info-container'>" +
+                          "  <div class='mc-title'><a href='film12345.html'>Card Title</a></div>" +
+                          "  <div><span class='mc-year ms-1'>2022</span></div>" +
+                          "  <div class='fa-avg-rat-box'><div class='avg mx-0'>7,8</div></div>" +
+                          "</div></div>";
+        Document doc = Jsoup.parseBodyFragment(cardHtml, "https://www.filmaffinity.com/es/"); // Need Base URI
+        Element cardElement = doc.selectFirst("div.movie-card");
+
+        assertNotNull("Card element should not be null", cardElement);
+
+        SearchResult result = FilmaffinityScraper.parseMovieCardElement(cardElement);
+
+        assertNotNull("SearchResult should not be null", result);
+        assertEquals("12345", result.getId());
+        assertEquals("Card Title", result.getTitle());
+        assertEquals("https://www.filmaffinity.com/es/film12345.html", result.getUrl());
+        assertEquals("7,8", result.getRating());
+        assertEquals("2022", result.getYear());
+        assertEquals("http://example.com/large.jpg", result.getImageUrl()); // Check if it prefers large
+    }
+
+     @Test
+     public void parseMovieCardElement_MinimalCardHtml_HandlesMissingData() {
+         String cardHtml = "<div class='movie-card' data-movie-id='67890'>" +
+                           "<div class='mc-info-container'>" +
+                           "  <div class='mc-title'><a href='film67890.html'>Minimal Card</a></div>" +
+                           "</div></div>";
+         Document doc = Jsoup.parseBodyFragment(cardHtml, "https://www.filmaffinity.com/es/");
+         Element cardElement = doc.selectFirst("div.movie-card");
+         SearchResult result = FilmaffinityScraper.parseMovieCardElement(cardElement);
+
+         assertNotNull(result);
+         assertEquals("67890", result.getId());
+         assertEquals("Minimal Card", result.getTitle());
+         assertEquals("https://www.filmaffinity.com/es/film67890.html", result.getUrl());
+         assertEquals("--", result.getRating()); // Default for missing rating
+         assertEquals("", result.getYear());     // Default for missing year
+         assertEquals("", result.getImageUrl()); // Default for missing image
+     }
+
+    // --- Tests for extractFilmIdFromUrl --- //
+
+    @Test
+    public void extractFilmIdFromUrl_ValidUrl_ReturnsId() {
+        assertEquals("123456", FilmaffinityScraper.extractFilmIdFromUrl("https://www.filmaffinity.com/es/film123456.html"));
+        assertEquals("789", FilmaffinityScraper.extractFilmIdFromUrl("http://filmaffinity.com/en/film789.html?foo=bar"));
+        assertEquals("1", FilmaffinityScraper.extractFilmIdFromUrl("/es/film1.html"));
+    }
+
+    @Test
+    public void extractFilmIdFromUrl_InvalidUrls_ReturnsNull() {
+        assertNull(FilmaffinityScraper.extractFilmIdFromUrl("https://www.filmaffinity.com/es/search.php?stext=test"));
+        assertNull(FilmaffinityScraper.extractFilmIdFromUrl("https://www.google.com"));
+        assertNull(FilmaffinityScraper.extractFilmIdFromUrl(null));
+        assertNull(FilmaffinityScraper.extractFilmIdFromUrl(""));
+        assertNull(FilmaffinityScraper.extractFilmIdFromUrl("/es/filmabc.html"));
     }
 } 

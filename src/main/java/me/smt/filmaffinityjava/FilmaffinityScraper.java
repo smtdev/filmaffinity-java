@@ -1,17 +1,23 @@
 package me.smt.filmaffinityjava;
 
+import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -25,6 +31,118 @@ public class FilmaffinityScraper {
     private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
     private static final int TIMEOUT_MILLIS = 15000; // 15 seconds timeout
     private static final String EMPTY_STRING = "";
+    private static final String BASE_URL = "https://www.filmaffinity.com";
+    private static final String SEARCH_URL_SIMPLE_TEMPLATE = BASE_URL + "/es/search.php?stype=title&stext=%s";
+    private static final String SEARCH_URL_EXACT_TEMPLATE = BASE_URL + "/es/search.php?stype=title&stext=%s&em=1";
+    private static final String SEARCH_URL_ADVANCED_TEMPLATE = BASE_URL + "/es/advsearch.php?stext=%s&stype[]=title&country=&genre=&fromyear=%d&toyear=%d";
+    private static final String FILM_URL_REGEX = ".*/film(\\d+)\\.html.*";
+    private static final Pattern FILM_ID_PATTERN = Pattern.compile(FILM_URL_REGEX);
+
+    /**
+     * Asynchronously searches for films or series on Filmaffinity by title.
+     *
+     * @param query The search query (title).
+     * @param year Optional year to refine the search (can be null).
+     * @param callback The callback to handle the list of results or an error.
+     */
+    public static void searchFilm(String query, Integer year, FilmSearchCallback callback) {
+        if (query == null || query.trim().isEmpty()) {
+            if (callback != null) callback.onError(new IllegalArgumentException("Search query cannot be null or empty."));
+            return;
+        }
+        if (callback == null) {
+            System.err.println("FilmaffinityScraper: Warning - Callback is null, search result will be lost for query: " + query);
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                String encodedQuery;
+                try {
+                    encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
+                } catch (UnsupportedEncodingException e) {
+                    // Should not happen with UTF-8
+                    callback.onError(new ScraperException("Failed to encode query: " + query, e));
+                    return;
+                }
+
+                // --- Try Exact Match First ---
+                String exactSearchUrl = String.format(SEARCH_URL_EXACT_TEMPLATE, encodedQuery);
+                Connection.Response response = Jsoup.connect(exactSearchUrl)
+                        .userAgent(DEFAULT_USER_AGENT)
+                        .timeout(TIMEOUT_MILLIS)
+                        .followRedirects(true) // Important!
+                        .execute();
+
+                String finalUrl = response.url().toString();
+                Matcher filmUrlMatcher = FILM_ID_PATTERN.matcher(finalUrl);
+
+                if (filmUrlMatcher.matches()) {
+                    // Redirected to a film page!
+                    Document filmDoc = response.parse(); // Parse the redirected page
+                    SearchResult result = parseBasicFilmInfoFromDoc(filmDoc, finalUrl);
+                    if (result != null) {
+                        callback.onSuccess(Collections.singletonList(result));
+                        return; // Found exact match, stop searching
+                    }
+                    // If parsing failed for some reason, continue to next search method
+                }
+
+                // --- Try Advanced Search if Year Provided ---
+                if (year != null) {
+                    String advancedSearchUrl = String.format(SEARCH_URL_ADVANCED_TEMPLATE, encodedQuery, year, year);
+                    Document resultsDoc = Jsoup.connect(advancedSearchUrl)
+                            .userAgent(DEFAULT_USER_AGENT)
+                            .timeout(TIMEOUT_MILLIS)
+                            .get();
+
+                    Elements movieCards = resultsDoc.select("ul.fa-list-group div.movie-card");
+                    List<SearchResult> results = new ArrayList<>();
+                    for (Element card : movieCards) {
+                        SearchResult result = parseMovieCardElement(card);
+                        if (result != null) {
+                            results.add(result);
+                        }
+                    }
+
+                    callback.onSuccess(results);
+                    return; // Found results (or empty list) via advanced search, stop searching
+                }
+
+                // --- Fallback to Simple Search ---
+                String simpleSearchUrl = String.format(SEARCH_URL_SIMPLE_TEMPLATE, encodedQuery);
+                Document simpleResultsDoc = Jsoup.connect(simpleSearchUrl)
+                        .userAgent(DEFAULT_USER_AGENT)
+                        .timeout(TIMEOUT_MILLIS)
+                        .get();
+
+                // Use the same selector as advanced search, assuming structure is similar
+                Elements simpleMovieCards = simpleResultsDoc.select("ul.fa-list-group div.movie-card");
+
+                // Fallback selector based on python script if the first yields no results
+                if (simpleMovieCards.isEmpty()) {
+                     simpleMovieCards = simpleResultsDoc.select("div.d-flex"); // Or adjust based on actual simple search page structure
+                }
+
+                List<SearchResult> simpleResults = new ArrayList<>();
+                for (Element card : simpleMovieCards) {
+                    SearchResult result = parseMovieCardElement(card);
+                    if (result != null) {
+                        simpleResults.add(result);
+                    }
+                }
+
+                callback.onSuccess(simpleResults); // Report results from simple search
+
+            } catch (IOException e) {
+                System.err.println("IOException during search for query: " + query + " - " + e.getMessage());
+                callback.onError(new ScraperException("Network error during search for: " + query, e));
+            } catch (Exception e) {
+                System.err.println("Unexpected error during search for query: " + query + " - " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                callback.onError(new ScraperException("Unexpected error during search for: " + query, e));
+            }
+        });
+    }
 
     /**
      * Asynchronously fetches film or series information from its Filmaffinity URL.
@@ -137,7 +255,8 @@ public class FilmaffinityScraper {
     private static FilmInfo.Type determineType(Document doc) {
          String typeString = getText(doc, "h1#main-title .movie-type .type");
          if (typeString != null) {
-             if ("Serie".equalsIgnoreCase(typeString)) {
+             // Check if the string CONTAINS "Serie", case-insensitive
+             if (typeString.toLowerCase().contains("serie")) {
                  return FilmInfo.Type.TV_SHOW;
              } else {
                  // Consider other potential types if Filmaffinity adds them (e.g., "Corto")
@@ -254,6 +373,115 @@ public class FilmaffinityScraper {
           return Collections.emptyList();
      }
 
+    /**
+     * Parses basic information from a film page Document into a SearchResult.
+     * Used primarily for the exact match search scenario.
+     * @param doc The Jsoup Document of the film page.
+     * @param filmUrl The final URL of the film page.
+     * @return SearchResult or null if essential info is missing.
+     */
+    static SearchResult parseBasicFilmInfoFromDoc(Document doc, String filmUrl) {
+        if (doc == null) return null;
+        try {
+            String id = extractFilmIdFromUrl(filmUrl);
+            if (id == null) return null; // Cannot create result without ID
+
+            String title = getText(doc, "h1#main-title span[itemprop=name]");
+            if (title == null || title.isEmpty()) return null; // Title is essential
+
+            String year = getText(doc, "dd[itemprop=datePublished]");
+            year = (year != null) ? year : EMPTY_STRING;
+
+            String rating = getText(doc, "#movie-rat-avg");
+            rating = (rating != null && !rating.isEmpty()) ? rating : "--"; // Default to --
+
+            String posterUrl = getAttr(doc, "#movie-main-image-container img", "src");
+            if (posterUrl == null || posterUrl.isEmpty()) {
+                String ogPosterUrl = getAttr(doc, "meta[property=og:image]", "content");
+                posterUrl = (ogPosterUrl != null) ? ogPosterUrl : EMPTY_STRING;
+            }
+
+            return new SearchResult(id, title, filmUrl, rating, year, posterUrl);
+        } catch (Exception e) {
+            System.err.println("Error parsing basic info from film page: " + filmUrl + " - " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extracts the numeric film ID from a Filmaffinity film URL.
+     * @param url The film URL.
+     * @return The numeric ID as a String, or null if not found.
+     */
+    static String extractFilmIdFromUrl(String url) {
+        if (url == null) return null;
+        Matcher matcher = FILM_ID_PATTERN.matcher(url);
+        if (matcher.matches() && matcher.groupCount() >= 1) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    /**
+     * Parses a 'movie-card' div element from search results into a SearchResult.
+     * @param cardElement The div.movie-card element.
+     * @return SearchResult or null if parsing fails.
+     */
+    static SearchResult parseMovieCardElement(Element cardElement) {
+        if (cardElement == null) return null;
+        try {
+            String id = cardElement.attr("data-movie-id"); // Get ID from data attribute
+            if (id == null || id.isEmpty()) return null;
+
+            Element titleLink = cardElement.selectFirst(".mc-title a");
+            String title = (titleLink != null) ? titleLink.text() : EMPTY_STRING;
+            String url = (titleLink != null) ? titleLink.absUrl("href") : EMPTY_STRING;
+
+            String year = getText(cardElement, ".mc-year");
+            year = (year != null) ? year : EMPTY_STRING;
+
+            String rating = getText(cardElement, ".fa-avg-rat-box .avg");
+            rating = (rating != null && !rating.isEmpty()) ? rating : "--";
+
+            String imageUrl = "";
+            Element img = cardElement.selectFirst(".mc-poster img");
+            if (img != null) {
+                imageUrl = img.absUrl("src"); // Try src first (might be placeholder)
+                String srcset = img.attr("data-srcset");
+                if (srcset != null && !srcset.isEmpty()) {
+                    // Try to get a better resolution from srcset (e.g., large)
+                    String[] sources = srcset.split(",");
+                    for (String source : sources) {
+                        String trimmedSource = source.trim();
+                        if (trimmedSource.contains("large")) {
+                            imageUrl = trimmedSource.split("\\s+")[0]; // Get the URL part
+                            break;
+                        }
+                         // Fallback to medium if large not found
+                         else if (trimmedSource.contains("mmed")) {
+                            imageUrl = trimmedSource.split("\\s+")[0];
+                         }
+                    }
+                }
+                 // Ensure URL is absolute
+                 if (!imageUrl.startsWith("http")) {
+                    // Try to construct absolute URL if it looks relative (needs BASE_URL)
+                    if (imageUrl.startsWith("/")) {
+                         imageUrl = BASE_URL + imageUrl;
+                    } else {
+                         imageUrl = EMPTY_STRING; // Invalid relative URL
+                    }
+                 }
+            }
+            imageUrl = (imageUrl != null) ? imageUrl : EMPTY_STRING;
+
+
+            return new SearchResult(id, title, url, rating, year, imageUrl);
+        } catch (Exception e) {
+            System.err.println("Error parsing movie card element: " + e.getMessage());
+            return null;
+        }
+    }
 
     /**
      * Shuts down the internal executor service, attempting graceful termination first.
