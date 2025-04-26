@@ -9,7 +9,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects; // Import Objects for requireNonNullElse
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -47,66 +46,91 @@ public class FilmaffinityScraper {
 
 
         executorService.execute(() -> {
-            Document doc = null;
             try {
                 // --- Network Fetch ---
-                doc = Jsoup.connect(contentUrl)
+                Document doc = Jsoup.connect(contentUrl)
                         .userAgent(DEFAULT_USER_AGENT)
                         .timeout(TIMEOUT_MILLIS)
                         .get();
 
-                // --- Data Extraction with Null Safety ---
-                String title = getText(doc, "h1#main-title span[itemprop=name]");
-                // Title is considered essential, fail if not found
-                if (title == null || title.isEmpty()) {
-                    callback.onError(new ScraperException("Could not extract title from: " + contentUrl));
-                    return;
-                }
-
-                String originalTitle = Objects.requireNonNullElse(findDlData(doc, "Título original"), EMPTY_STRING);
-                String year = Objects.requireNonNullElse(getText(doc, "dd[itemprop=datePublished]"), EMPTY_STRING);
-                String duration = Objects.requireNonNullElse(findDlData(doc, "Duración"), EMPTY_STRING);
-                String country = Objects.requireNonNullElse(findDlData(doc, "País"), EMPTY_STRING);
-                String synopsis = Objects.requireNonNullElse(getText(doc, "dd[itemprop=description]"), EMPTY_STRING);
-                // Rating is also quite important, handle its potential absence carefully
-                String rating = getText(doc, "#movie-rat-avg");
-                 if (rating == null || rating.isEmpty()) {
-                    System.err.println("FilmaffinityScraper: Warning - Could not extract rating for URL: " + contentUrl);
-                    rating = EMPTY_STRING; // Assign empty instead of null
-                 }
-
-
-                String posterUrl = getAttr(doc, "#movie-main-image-container img", "src");
-                if (posterUrl == null || posterUrl.isEmpty()) {
-                    posterUrl = Objects.requireNonNullElse(getAttr(doc, "meta[property=og:image]", "content"), EMPTY_STRING);
-                }
-
-                List<String> directors = getCredits(doc, "Dirección"); // Already returns empty list if fails
-                List<String> genres = getGenres(doc); // Already returns empty list if fails
-
-                // --- Determine Type ---
-                FilmInfo.Type type = determineType(doc);
-
-                // --- Create Result Object ---
-                FilmInfo filmInfo = new FilmInfo(
-                        title, originalTitle, year, duration, country,
-                        directors, genres, synopsis, rating, posterUrl, type
-                );
+                // --- Call the Parsing Logic ---
+                FilmInfo filmInfo = parseFilmInfo(doc, contentUrl);
 
                 // --- Report Success ---
                 callback.onSuccess(filmInfo);
 
+            } catch (ScraperException e) {
+                 System.err.println("ScraperException parsing content from: " + contentUrl + " - " + e.getMessage());
+                 callback.onError(e);
             } catch (IOException e) {
-                // --- Network Error Handling ---
-                System.err.println("IOException fetching or parsing URL: " + contentUrl + " - " + e.getMessage());
+                System.err.println("IOException fetching URL: " + contentUrl + " - " + e.getMessage());
                 callback.onError(new ScraperException("Network error fetching URL: " + contentUrl, e));
             } catch (Exception e) {
-                // --- General Parsing/Runtime Error Handling ---
-                System.err.println("Unexpected error extracting film info from " + contentUrl + " - " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                // e.printStackTrace(); // Uncomment for detailed debugging if needed
-                callback.onError(new ScraperException("Error parsing content from URL: " + contentUrl, e));
+                System.err.println("Unexpected error during fetchFilmInfo for " + contentUrl + " - " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                callback.onError(new ScraperException("Unexpected error processing URL: " + contentUrl, e));
             }
         });
+    }
+
+    /**
+     * Parses the film information from a pre-fetched Jsoup Document.
+     * Made package-private for testability.
+     * @param doc The Jsoup Document of the Filmaffinity page.
+     * @param sourceUrl The original URL (used for error messages).
+     * @return FilmInfo object with the parsed data.
+     * @throws ScraperException if essential data (like title) cannot be parsed.
+     */
+    static FilmInfo parseFilmInfo(Document doc, String sourceUrl) throws ScraperException {
+        if (doc == null) {
+            throw new ScraperException("Input Document is null for URL: " + sourceUrl);
+        }
+        try {
+            // --- Data Extraction with Null Safety ---
+            String title = getText(doc, "h1#main-title span[itemprop=name]");
+            if (title == null || title.isEmpty()) {
+                throw new ScraperException("Could not extract title from: " + sourceUrl);
+            }
+
+            String originalTitle = findDlData(doc, "Título original");
+            originalTitle = (originalTitle != null) ? originalTitle : EMPTY_STRING;
+
+            String year = getText(doc, "dd[itemprop=datePublished]");
+            year = (year != null) ? year : EMPTY_STRING;
+
+            String duration = findDlData(doc, "Duración");
+            duration = (duration != null) ? duration : EMPTY_STRING;
+
+            String country = findDlData(doc, "País");
+            country = (country != null) ? country : EMPTY_STRING;
+
+            String synopsis = getText(doc, "dd[itemprop=description]");
+            synopsis = (synopsis != null) ? synopsis : EMPTY_STRING;
+
+            String rating = getText(doc, "#movie-rat-avg");
+            if (rating == null || rating.isEmpty()) {
+                System.err.println("FilmaffinityScraper: Warning - Could not extract rating for URL: " + sourceUrl);
+                rating = EMPTY_STRING;
+            }
+
+            String posterUrl = getAttr(doc, "#movie-main-image-container img", "src");
+            if (posterUrl == null || posterUrl.isEmpty()) {
+                String ogPosterUrl = getAttr(doc, "meta[property=og:image]", "content");
+                posterUrl = (ogPosterUrl != null) ? ogPosterUrl : EMPTY_STRING;
+            }
+
+            List<String> directors = getCredits(doc, "Dirección");
+            List<String> genres = getGenres(doc);
+            FilmInfo.Type type = determineType(doc);
+
+            // --- Create Result Object ---
+            return new FilmInfo(
+                    title, originalTitle, year, duration, country,
+                    directors, genres, synopsis, rating, posterUrl, type
+            );
+        } catch (Exception e) {
+            // Wrap unexpected parsing errors
+             throw new ScraperException("Error parsing content from URL: " + sourceUrl, e);
+        }
     }
 
     /** Determines the content type (Movie/TV Show) based on page elements. */
@@ -179,13 +203,12 @@ public class FilmaffinityScraper {
             if (dt.text().trim().equalsIgnoreCase(dtText.trim())) {
                  Element dd = dt.nextElementSibling();
                  if (dd != null) {
-                     // Prioritize extracting names from links or specific spans
-                     Elements nameElements = dd.select(".credits span[itemprop=name], .credits span > a, .credits > span > span[itemprop=name]"); // Refined selector
+                     Elements nameElements = dd.select(".credits span[itemprop=name], .credits span > a, .credits > span > span[itemprop=name]");
                       if (!nameElements.isEmpty()) {
                           return nameElements.stream()
                                   .map(Element::text)
-                                  .filter(name -> name != null && !name.trim().isEmpty())
-                                  .distinct() // Avoid duplicates if structure is weird
+                                  .filter(name -> !name.trim().isEmpty())
+                                  .distinct()
                                   .collect(Collectors.toList());
                       } else {
                           // Fallback for simple text credits (like Música: Varios)
@@ -206,11 +229,10 @@ public class FilmaffinityScraper {
                           }
                       }
                  }
-                 // Found the dt but couldn't extract from dd, return empty
                  return Collections.emptyList();
              }
          }
-         return Collections.emptyList(); // dtText not found
+         return Collections.emptyList();
     }
 
      /** Extracts genres and topics. Returns an empty list if not found. */
@@ -218,30 +240,17 @@ public class FilmaffinityScraper {
           if (doc == null) return Collections.emptyList();
           Element dd = doc.selectFirst("dd.card-genres");
           if (dd != null) {
-             // Selects links within the main genre span and subsequent topic links
-             Elements genreLinks = dd.select("span[itemprop=genre] a, a[href*=movietopic]");
+             // Use a simpler selector to capture ALL links within the dd element
+             Elements genreLinks = dd.select("a"); // Select all 'a' tags within dd.card-genres
              if (!genreLinks.isEmpty()) {
                  return genreLinks.stream()
                          .map(Element::text)
-                         .filter(genre -> genre != null && !genre.trim().isEmpty())
+                         .filter(genre -> !genre.trim().isEmpty())
                          .distinct()
                          .collect(Collectors.toList());
              }
           }
-          // Fallback (less reliable) - Consider removing if too noisy
-          /*
-          String metaKeywords = getAttr(doc, "meta[name=keywords]", "content");
-          if (metaKeywords != null && !metaKeywords.isEmpty()) {
-             String[] keywords = metaKeywords.split(",\\s*");
-             List<String> genresFromMeta = new ArrayList<>();
-             for (String keyword : keywords) {
-                 if (!keyword.matches("\\d{4}") && keyword.length() > 2) {
-                      genresFromMeta.add(keyword.trim());
-                 }
-             }
-             if (!genresFromMeta.isEmpty()) return genresFromMeta;
-          }
-          */
+          // Fallback logic removed for now as it was commented out and potentially unreliable
           return Collections.emptyList();
      }
 

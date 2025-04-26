@@ -3,7 +3,7 @@ package me.smt.filmaffinityjava;
 /**
  * Callback interface for receiving the result or error of an asynchronous film info fetch operation.
  */
-public interface RatingCallback { // Keep filename for now
+public interface FilmInfoCallback { // Keep filename for now
     /**
      * Called when the film information is successfully fetched.
      * Note: This method might be called on a background thread.
