@@ -21,6 +21,7 @@ A simple Java library to fetch movie and TV show information by scraping the [Fi
 ## Features
 
 *   Fetches detailed information for movies and TV shows given their Filmaffinity URL.
+*   **Search for movies/series by title (v1.1.0+).**
 *   Extracts data such as:
     *   Title
     *   Original Title
@@ -88,7 +89,11 @@ This library can be easily added to your Gradle or Maven project via [JitPack](h
 
 ## Usage
 
-The main class is `FilmaffinityScraper`. Use the static `fetchFilmInfo` method to fetch data asynchronously.
+The main class is `FilmaffinityScraper`.
+
+### Fetching Detailed Information (by URL)
+
+Use the static `fetchFilmInfo` method to fetch data asynchronously from a specific Filmaffinity URL.
 
 **Example (Java):**
 
@@ -97,7 +102,7 @@ import me.smt.filmaffinityjava.FilmInfo;
 import me.smt.filmaffinityjava.FilmInfoCallback;
 import me.smt.filmaffinityjava.FilmaffinityScraper;
 
-public class Main {
+public class MainFetch {
 
     public static void main(String[] args) {
         String pulpFictionUrl = "https://www.filmaffinity.com/en/film160882.html"; // Use English URL if preferred
@@ -128,23 +133,94 @@ public class Main {
         // In a real app (Android, server), this wouldn't be needed
         // or would be handled differently.
         try {
-            System.out.println("Waiting for callbacks (example purposes)...");
+            System.out.println("Waiting for fetch callbacks (example purposes)...");
             Thread.sleep(10000); // Wait 10 seconds (don't do this in production)
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
             // It's HIGHLY recommended to call shutdownExecutor when your application exits
             // to release the scraper's threads cleanly.
-             System.out.println("Shutting down scraper executor...");
+             System.out.println("Shutting down scraper executor (Fetch Example)...");
             FilmaffinityScraper.shutdownExecutor();
         }
     }
 }
 ```
 
-**Important:**
+**Important (Fetch):**
 *   The `FilmInfoCallback` executes on a background thread. If you update a User Interface (like in Android), ensure you do it on the main thread (using `runOnUiThread`, `Handler`, coroutines, etc.).
 *   Remember to call `FilmaffinityScraper.shutdownExecutor()` when your application terminates to release thread pool resources.
+
+### Searching for Movies/Series (by Title - v1.1.0+)
+
+Starting from version 1.1.0, you can search for movies or series by title using `searchFilm`. You can optionally provide the year to refine the search.
+
+**Example (Java):**
+
+```java
+import me.smt.filmaffinityjava.FilmaffinityScraper;
+import me.smt.filmaffinityjava.FilmSearchCallback;
+import me.smt.filmaffinityjava.SearchResult;
+
+import java.util.List;
+
+public class MainSearch {
+
+    public static void main(String[] args) {
+        String searchQuery = "Pulp Fiction";
+        Integer searchYear = 1994; // Optional, can be null
+
+        System.out.println("Searching for '" + searchQuery + "'...");
+        FilmaffinityScraper.searchFilm(searchQuery, searchYear, new FilmSearchCallback() {
+            @Override
+            public void onSuccess(List<SearchResult> results) {
+                // IMPORTANT: Executed on a background thread.
+                if (results.isEmpty()) {
+                    System.out.println("No results found for '" + searchQuery + "'.");
+                } else {
+                    System.out.println("Found results:");
+                    for (SearchResult result : results) {
+                        System.out.println("  ID: " + result.getId());
+                        System.out.println("  Title: " + result.getTitle());
+                        System.out.println("  Year: " + result.getYear());
+                        System.out.println("  Rating: " + result.getRating());
+                        System.out.println("  URL: " + result.getUrl());
+                        System.out.println("  Image: " + result.getImageUrl());
+                        System.out.println("  ----");
+                        // You can use the result URL to call fetchFilmInfo if you need more details
+                        // FilmaffinityScraper.fetchFilmInfo(result.getUrl(), anotherCallback);
+                    }
+                }
+            }
+
+            @Override
+            public void onError(Exception e) {
+                // IMPORTANT: Executed on a background thread.
+                System.err.println("Error during search: " + e.getMessage());
+            }
+        });
+
+        // Required in a simple application to wait for callbacks.
+        // In a real app (Android, server), this wouldn't be needed
+        // or would be handled differently.
+        try {
+            System.out.println("Waiting for search callbacks (example purposes)...");
+            Thread.sleep(5000); // Wait 5 seconds
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            // Remember to call FilmaffinityScraper.shutdownExecutor() at the end.
+             System.out.println("Shutting down scraper executor (Search Example)...");
+             FilmaffinityScraper.shutdownExecutor();
+        }
+    }
+}
+```
+
+**Important (Search):**
+*   The `FilmSearchCallback` also executes on a background thread. Handle UI updates the same way as with `fetchFilmInfo`.
+*   The search attempts to find the best match possible, but the nature of web scraping can make it fragile.
+*   Remember to call `FilmaffinityScraper.shutdownExecutor()` at the end.
 
 ## License
 
